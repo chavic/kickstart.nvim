@@ -325,6 +325,31 @@ end
 ---@return string
 local function gh(repo) return 'https://github.com/' .. repo end
 
+-- Resolve the closest project root for searches, terminals, and agents.
+local project_markers = {
+  '.git',
+  '.clangd',
+  'Cargo.toml',
+  'compile_commands.json',
+  'pubspec.yaml',
+  'pyproject.toml',
+  'Project.toml',
+  'JuliaProject.toml',
+  'build.zig',
+  'global.json',
+  'Directory.Build.props',
+}
+
+---@param bufnr? integer
+---@return string
+local function project_root(bufnr) return vim.fs.root(bufnr or 0, project_markers) or vim.fn.getcwd() end
+
+vim.api.nvim_create_user_command('Root', function()
+  local root = project_root()
+  vim.cmd.cd(vim.fn.fnameescape(root))
+  vim.notify('Working directory: ' .. root)
+end, { desc = 'Change working directory to the current project root' })
+
 -- ============================================================
 -- SECTION 4: UI / CORE UX PLUGINS
 -- guess-indent, gitsigns, which-key, colorscheme, todo-comments, mini modules
@@ -372,6 +397,8 @@ do
       { '<leader>s', group = '[S]earch', mode = { 'n', 'v' } },
       { '<leader>t', group = '[T]oggle' },
       { '<leader>h', group = 'Git [H]unk', mode = { 'n', 'v' } }, -- Enable gitsigns recommended keymaps first
+      { '<leader>a', group = '[A]gent', mode = { 'n', 'v' } },
+      { '<leader>x', group = 'Trouble', mode = { 'n' } },
       { 'gr', group = 'LSP Actions', mode = { 'n' } },
     },
   }
@@ -385,9 +412,84 @@ do
   vim.pack.add { gh 'folke/tokyonight.nvim' }
   ---@diagnostic disable-next-line: missing-fields
   require('tokyonight').setup {
+    transparent = true,
     styles = {
       comments = { italic = false }, -- Disable italics in comments
+      floats = 'transparent',
+      sidebars = 'transparent',
     },
+    -- Keep Ghostty's resolved accent palette while inheriting the background
+    -- from whichever terminal is running Neovim.
+    on_colors = function(colors)
+      colors.bg = colors.none
+      colors.bg_dark = colors.none
+      colors.bg_dark1 = colors.none
+      colors.bg_float = colors.none
+      colors.bg_highlight = '#3b4048'
+      colors.bg_popup = colors.none
+      colors.bg_sidebar = colors.none
+      colors.bg_statusline = colors.none
+      colors.bg_visual = '#3b4048'
+      colors.bg_search = '#666666'
+      colors.black = '#1d1f21'
+      colors.blue = '#81a2be'
+      colors.blue0 = '#7aa6da'
+      colors.blue1 = '#8abeb7'
+      colors.blue2 = '#70c0b1'
+      colors.blue5 = '#7aa6da'
+      colors.blue6 = '#eaeaea'
+      colors.blue7 = '#3b4048'
+      colors.border = '#3b4048'
+      colors.border_highlight = '#81a2be'
+      colors.comment = '#666666'
+      colors.cyan = '#8abeb7'
+      colors.dark3 = '#666666'
+      colors.dark5 = '#969896'
+      colors.error = '#d54e53'
+      colors.fg = '#ffffff'
+      colors.fg_dark = '#c5c8c6'
+      colors.fg_float = '#ffffff'
+      colors.fg_gutter = '#666666'
+      colors.fg_sidebar = '#c5c8c6'
+      colors.green = '#b5bd68'
+      colors.green1 = '#b9ca4a'
+      colors.green2 = '#8abeb7'
+      colors.hint = '#8abeb7'
+      colors.info = '#70c0b1'
+      colors.magenta = '#b294bb'
+      colors.magenta2 = '#c397d8'
+      colors.orange = '#de935f'
+      colors.purple = '#c397d8'
+      colors.red = '#cc6666'
+      colors.red1 = '#d54e53'
+      colors.teal = '#8abeb7'
+      colors.terminal_black = '#666666'
+      colors.warning = '#f0c674'
+      colors.yellow = '#f0c674'
+      colors.git = {
+        add = '#b5bd68',
+        change = '#81a2be',
+        delete = '#cc6666',
+      }
+      colors.terminal = {
+        black = '#1d1f21',
+        black_bright = '#666666',
+        red = '#cc6666',
+        red_bright = '#d54e53',
+        green = '#b5bd68',
+        green_bright = '#b9ca4a',
+        yellow = '#f0c674',
+        yellow_bright = '#e7c547',
+        blue = '#81a2be',
+        blue_bright = '#7aa6da',
+        magenta = '#b294bb',
+        magenta_bright = '#c397d8',
+        cyan = '#8abeb7',
+        cyan_bright = '#70c0b1',
+        white = '#c5c8c6',
+        white_bright = '#eaeaea',
+      }
+    end,
   }
 
   -- Load the colorscheme here.
@@ -513,10 +615,10 @@ do
   local builtin = require 'telescope.builtin'
   vim.keymap.set('n', '<leader>sh', builtin.help_tags, { desc = '[S]earch [H]elp' })
   vim.keymap.set('n', '<leader>sk', builtin.keymaps, { desc = '[S]earch [K]eymaps' })
-  vim.keymap.set('n', '<leader>sf', builtin.find_files, { desc = '[S]earch [F]iles' })
+  vim.keymap.set('n', '<leader>sf', function() builtin.find_files { cwd = project_root() } end, { desc = '[S]earch [F]iles' })
   vim.keymap.set('n', '<leader>ss', builtin.builtin, { desc = '[S]earch [S]elect Telescope' })
   vim.keymap.set({ 'n', 'v' }, '<leader>sw', builtin.grep_string, { desc = '[S]earch current [W]ord' })
-  vim.keymap.set('n', '<leader>sg', builtin.live_grep, { desc = '[S]earch by [G]rep' })
+  vim.keymap.set('n', '<leader>sg', function() builtin.live_grep { cwd = project_root() } end, { desc = '[S]earch by [G]rep' })
   vim.keymap.set('n', '<leader>sd', builtin.diagnostics, { desc = '[S]earch [D]iagnostics' })
   vim.keymap.set('n', '<leader>sr', builtin.resume, { desc = '[S]earch [R]esume' })
   vim.keymap.set('n', '<leader>s.', builtin.oldfiles, { desc = '[S]earch Recent Files ("." for repeat)' })
@@ -703,7 +805,55 @@ do
     -- But for many setups, the LSP (`ts_ls`) will work just fine
     -- ts_ls = {},
 
-    stylua = {}, -- Used to format Lua code
+    rust_analyzer = {
+      settings = {
+        ['rust-analyzer'] = {
+          cargo = { allFeatures = true },
+          check = { command = 'clippy' },
+          procMacro = { enable = true },
+        },
+      },
+    },
+
+    basedpyright = {
+      settings = {
+        basedpyright = {
+          analysis = {
+            autoSearchPaths = true,
+            diagnosticMode = 'openFilesOnly',
+            typeCheckingMode = 'standard',
+          },
+        },
+      },
+    },
+
+    ruff = {
+      on_attach = function(client)
+        -- basedpyright owns Python hover information; Ruff handles linting and fixes.
+        client.server_capabilities.hoverProvider = false
+      end,
+    },
+
+    taplo = {},
+
+    roslyn_ls = {},
+
+    clangd = {},
+
+    julials = {
+      -- Mason provides a standalone wrapper that expects the active Julia
+      -- environment as its first argument.
+      cmd = function(dispatchers, config)
+        local root = config.root_dir or vim.fn.getcwd()
+        return vim.lsp.rpc.start({ 'julia-lsp', root }, dispatchers, {
+          cwd = root,
+          env = config.cmd_env,
+          detached = config.detached,
+        })
+      end,
+    },
+
+    zls = {},
 
     -- Special Lua Config, as recommended by neovim help docs
     lua_ls = {
@@ -759,7 +909,10 @@ do
   -- You can press `g?` for help in this menu.
   local ensure_installed = vim.tbl_keys(servers or {})
   vim.list_extend(ensure_installed, {
-    -- You can add other tools here that you want Mason to install
+    'clang-format',
+    'csharpier',
+    'markdownlint',
+    'stylua',
   })
 
   require('mason-tool-installer').setup { ensure_installed = ensure_installed }
@@ -768,6 +921,11 @@ do
     vim.lsp.config(name, server)
     vim.lsp.enable(name)
   end
+
+  -- Dart's language server ships with the Dart/Flutter SDK, so Mason must not
+  -- manage it. nvim-lspconfig supplies the command and project-root defaults.
+  vim.lsp.config('dartls', {})
+  vim.lsp.enable 'dartls'
 end
 
 -- ============================================================
@@ -796,7 +954,13 @@ do
     },
     -- You can also specify external formatters in here.
     formatters_by_ft = {
-      -- rust = { 'rustfmt' },
+      c = { 'clang-format' },
+      cs = { 'csharpier' },
+      cpp = { 'clang-format' },
+      rust = { 'rustfmt' },
+      python = { 'ruff_format' },
+      dart = { 'dart_format' },
+      zig = { 'zigfmt' },
       -- Conform can also run multiple formatters sequentially
       -- python = { "isort", "black" },
       --
@@ -809,7 +973,75 @@ do
 end
 
 -- ============================================================
--- SECTION 8: AUTOCOMPLETE & SNIPPETS
+-- SECTION 8: DIAGNOSTICS & TERMINAL
+-- trouble.nvim lists and a project-scoped terminal
+-- ============================================================
+do
+  -- [[ Structured diagnostic and quickfix lists ]]
+  vim.pack.add { gh 'folke/trouble.nvim' }
+  require('trouble').setup {}
+
+  vim.keymap.set('n', '<leader>xx', '<cmd>Trouble diagnostics toggle<CR>', { desc = 'Workspace diagnostics' })
+  vim.keymap.set('n', '<leader>xX', '<cmd>Trouble diagnostics toggle filter.buf=0<CR>', { desc = 'Buffer diagnostics' })
+  vim.keymap.set('n', '<leader>xq', '<cmd>Trouble qflist toggle<CR>', { desc = 'Quickfix list' })
+  vim.keymap.set('n', '<leader>xr', '<cmd>Trouble lsp_references toggle<CR>', { desc = 'LSP references' })
+
+  -- [[ Toggleable terminal ]]
+  vim.pack.add { gh 'folke/snacks.nvim' }
+  require('snacks').setup { terminal = { enabled = true } }
+
+  local function toggle_terminal()
+    if vim.bo.buftype ~= 'terminal' or not vim.t.project_terminal_root then vim.t.project_terminal_root = project_root() end
+    Snacks.terminal.toggle(nil, { cwd = vim.t.project_terminal_root })
+  end
+
+  vim.keymap.set({ 'n', 't' }, '<C-\\>', toggle_terminal, { desc = 'Toggle project terminal' })
+end
+
+-- ============================================================
+-- SECTION 9: AGENT
+-- ACP client for Claude Code, Codex, and OpenCode
+-- ============================================================
+do
+  -- Claude and Codex require ACP bridges in PATH:
+  --   pnpm add -g @agentclientprotocol/claude-agent-acp
+  --   pnpm add -g @zed-industries/codex-acp
+  -- OpenCode speaks ACP through its existing `opencode` executable.
+  local default_agent_provider = vim.fn.executable 'claude-agent-acp' == 1 and 'claude-agent-acp' or 'opencode-acp'
+
+  vim.pack.add { gh 'carlos-algms/agentic.nvim' }
+  require('agentic').setup {
+    provider = default_agent_provider,
+    windows = {
+      position = 'right',
+      width = '40%',
+    },
+    diff_preview = {
+      enabled = true,
+      layout = 'split',
+      center_on_navigate_hunks = true,
+    },
+  }
+
+  local function at_project_root(callback)
+    vim.cmd.cd(vim.fn.fnameescape(project_root()))
+    callback()
+  end
+
+  vim.keymap.set('n', '<leader>aa', function()
+    at_project_root(function() require('agentic').toggle() end)
+  end, { desc = 'Toggle agent panel' })
+  vim.keymap.set('n', '<leader>af', function() require('agentic').add_file() end, { desc = 'Add current file to agent' })
+  vim.keymap.set('v', '<leader>as', function() require('agentic').add_selection() end, { desc = 'Add selection to agent' })
+  vim.keymap.set('n', '<leader>an', function()
+    at_project_root(function() require('agentic').new_session() end)
+  end, { desc = 'New agent session' })
+  vim.keymap.set('n', '<leader>ap', function() require('agentic').switch_provider() end, { desc = 'Switch agent provider' })
+  vim.keymap.set('n', '<leader>ar', function() require('agentic').restore_session() end, { desc = 'Restore agent session' })
+end
+
+-- ============================================================
+-- SECTION 10: AUTOCOMPLETE & SNIPPETS
 -- blink.cmp and luasnip setup
 -- ============================================================
 do
@@ -891,7 +1123,7 @@ do
 end
 
 -- ============================================================
--- SECTION 9: TREESITTER
+-- SECTION 11: TREESITTER
 -- Parser installation, syntax highlighting, folds, indentation
 -- ============================================================
 do
@@ -904,7 +1136,27 @@ do
   vim.pack.add { { src = gh 'nvim-treesitter/nvim-treesitter', version = 'main' } }
 
   -- Ensure basic parsers are installed
-  local parsers = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc' }
+  local parsers = {
+    'bash',
+    'c',
+    'c_sharp',
+    'cpp',
+    'dart',
+    'diff',
+    'html',
+    'julia',
+    'lua',
+    'luadoc',
+    'markdown',
+    'markdown_inline',
+    'python',
+    'query',
+    'rust',
+    'toml',
+    'vim',
+    'vimdoc',
+    'zig',
+  }
   require('nvim-treesitter').install(parsers)
 
   ---@param buf integer
@@ -953,7 +1205,7 @@ do
 end
 
 -- ============================================================
--- SECTION 10: OPTIONAL EXAMPLES / NEXT STEPS
+-- SECTION 12: OPTIONAL EXAMPLES / NEXT STEPS
 -- kickstart.plugins.* examples
 -- ============================================================
 do
@@ -968,9 +1220,9 @@ do
   --
   -- require 'kickstart.plugins.debug'
   -- require 'kickstart.plugins.indent_line'
-  -- require 'kickstart.plugins.lint'
-  -- require 'kickstart.plugins.autopairs'
-  -- require 'kickstart.plugins.neo-tree'
+  require 'kickstart.plugins.lint'
+  require 'kickstart.plugins.autopairs'
+  require 'kickstart.plugins.neo-tree'
   -- require 'kickstart.plugins.gitsigns' -- adds gitsigns recommended keymaps
 
   -- NOTE: You can add your own plugins, configuration, etc from `lua/custom/plugins/*.lua`
