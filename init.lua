@@ -418,17 +418,12 @@ do
       floats = 'transparent',
       sidebars = 'transparent',
     },
-    -- Keep Ghostty's resolved accent palette while inheriting the background
-    -- from whichever terminal is running Neovim.
+    -- Keep Ghostty's resolved accent palette. `transparent` and the sidebar/
+    -- float styles above make Neovim inherit whichever terminal background is
+    -- behind it. Keep TokyoNight's internal background colors as real hex
+    -- values because it uses them when calculating blended highlight colors.
     on_colors = function(colors)
-      colors.bg = colors.none
-      colors.bg_dark = colors.none
-      colors.bg_dark1 = colors.none
-      colors.bg_float = colors.none
       colors.bg_highlight = '#3b4048'
-      colors.bg_popup = colors.none
-      colors.bg_sidebar = colors.none
-      colors.bg_statusline = colors.none
       colors.bg_visual = '#3b4048'
       colors.bg_search = '#666666'
       colors.black = '#1d1f21'
