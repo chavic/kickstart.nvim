@@ -342,8 +342,37 @@ local project_markers = {
 
 ---@param bufnr? integer
 ---@return string
-local function project_root(bufnr) return vim.fs.root(bufnr or 0, project_markers) or vim.fn.getcwd() end
+local function project_root(bufnr)
+  local buffer = bufnr or 0
+  local cwd = vim.fn.getcwd()
+  local source = vim.api.nvim_buf_get_name(buffer) ~= '' and buffer or cwd
+  return vim.fs.root(source, project_markers) or cwd
+end
 
+---@param bufnr? integer
+---@return string
+local function git_root(bufnr)
+  local buffer = bufnr or 0
+  local cwd = vim.fn.getcwd()
+  local source = vim.api.nvim_buf_get_name(buffer) ~= '' and buffer or cwd
+  return vim.fs.root(source, '.git') or project_root(buffer)
+end
+
+-- Pick the working directory once, after Neovim has loaded its initial file.
+-- Telescope, Neo-tree, terminals, tasks, and agents can then share one stable
+-- project directory instead of changing it every time you enter a buffer.
+vim.api.nvim_create_autocmd('VimEnter', {
+  desc = 'Set the working directory to the initial project root once',
+  group = vim.api.nvim_create_augroup('kickstart-project-root', { clear = true }),
+  once = true,
+  callback = function()
+    local root = project_root(0)
+    if root ~= vim.fn.getcwd() then vim.cmd.cd(vim.fn.fnameescape(root)) end
+  end,
+})
+
+-- This remains an explicit escape hatch when you intentionally want to move
+-- the whole Neovim session to the project containing the current buffer.
 vim.api.nvim_create_user_command('Root', function()
   local root = project_root()
   vim.cmd.cd(vim.fn.fnameescape(root))
@@ -384,7 +413,59 @@ do
       topdelete = { text = '‾' }, ---@diagnostic disable-line: missing-fields
       changedelete = { text = '~' }, ---@diagnostic disable-line: missing-fields
     },
+    on_attach = function(bufnr)
+      local gitsigns = require 'gitsigns'
+      local map = function(mode, lhs, rhs, desc) vim.keymap.set(mode, lhs, rhs, { buffer = bufnr, desc = desc }) end
+
+      map('n', ']c', function()
+        if vim.wo.diff then
+          vim.cmd.normal { ']c', bang = true }
+        else
+          gitsigns.nav_hunk 'next'
+        end
+      end, 'Next git change')
+      map('n', '[c', function()
+        if vim.wo.diff then
+          vim.cmd.normal { '[c', bang = true }
+        else
+          gitsigns.nav_hunk 'prev'
+        end
+      end, 'Previous git change')
+
+      map('n', '<leader>hs', gitsigns.stage_hunk, 'Git stage hunk')
+      map('n', '<leader>hr', gitsigns.reset_hunk, 'Git reset hunk')
+      map('v', '<leader>hs', function() gitsigns.stage_hunk { vim.fn.line '.', vim.fn.line 'v' } end, 'Git stage selected hunk')
+      map('v', '<leader>hr', function() gitsigns.reset_hunk { vim.fn.line '.', vim.fn.line 'v' } end, 'Git reset selected hunk')
+      map('n', '<leader>hS', gitsigns.stage_buffer, 'Git stage buffer')
+      map('n', '<leader>hR', gitsigns.reset_buffer, 'Git reset buffer')
+      map('n', '<leader>hp', gitsigns.preview_hunk, 'Git preview hunk')
+      map('n', '<leader>hi', gitsigns.preview_hunk_inline, 'Git preview hunk inline')
+      map('n', '<leader>hb', function() gitsigns.blame_line { full = true } end, 'Git blame line')
+      map('n', '<leader>hd', gitsigns.diffthis, 'Git diff against index')
+      map('n', '<leader>hD', function() gitsigns.diffthis '@' end, 'Git diff against last commit')
+      map('n', '<leader>hq', gitsigns.setqflist, 'Git changes in current file')
+      map('n', '<leader>hQ', function() gitsigns.setqflist 'all' end, 'Git changes in repository')
+      map('n', '<leader>tb', gitsigns.toggle_current_line_blame, 'Toggle git blame line')
+      map('n', '<leader>tw', gitsigns.toggle_word_diff, 'Toggle git word diff')
+      map({ 'o', 'x' }, 'ih', gitsigns.select_hunk, 'Select git hunk')
+    end,
   }
+
+  -- Full-file and repository history review. Diffview does no repository work
+  -- until one of its commands is opened, so it remains cheap during editing.
+  vim.pack.add { gh 'sindrets/diffview.nvim' }
+  require('diffview').setup {
+    use_icons = vim.g.have_nerd_font,
+    view = {
+      merge_tool = { disable_diagnostics = true },
+    },
+  }
+
+  vim.keymap.set('n', '<leader>gd', '<cmd>DiffviewOpen<CR>', { desc = 'Git working tree [D]iff' })
+  vim.keymap.set('n', '<leader>gD', '<cmd>DiffviewOpen HEAD<CR>', { desc = 'Git diff against HEA[D]' })
+  vim.keymap.set('n', '<leader>gh', '<cmd>DiffviewFileHistory %<CR>', { desc = 'Git current-file [H]istory' })
+  vim.keymap.set('n', '<leader>gH', '<cmd>DiffviewFileHistory<CR>', { desc = 'Git repository [H]istory' })
+  vim.keymap.set('n', '<leader>gq', '<cmd>DiffviewClose<CR>', { desc = 'Git diffview [Q]uit' })
 
   -- Useful plugin to show you pending keybinds.
   vim.pack.add { gh 'folke/which-key.nvim' }
@@ -396,8 +477,10 @@ do
     spec = {
       { '<leader>s', group = '[S]earch', mode = { 'n', 'v' } },
       { '<leader>t', group = '[T]oggle' },
+      { '<leader>g', group = '[G]it' },
       { '<leader>h', group = 'Git [H]unk', mode = { 'n', 'v' } }, -- Enable gitsigns recommended keymaps first
       { '<leader>a', group = '[A]gent', mode = { 'n', 'v' } },
+      { '<leader>r', group = '[R]un/Tasks', mode = { 'n' } },
       { '<leader>x', group = 'Trouble', mode = { 'n' } },
       { 'gr', group = 'LSP Actions', mode = { 'n' } },
     },
@@ -831,7 +914,32 @@ do
 
     taplo = {},
 
-    roslyn_ls = {},
+    roslyn_ls = {
+      -- Large .NET solutions can become unresponsive when Roslyn analyzes every
+      -- project while Neo-tree is scanning the same repository. Keep interactive
+      -- diagnostics scoped to open files; `dotnet build`/`dotnet test` remain the
+      -- authoritative full-solution checks and are available through Overseer.
+      settings = {
+        ['csharp|background_analysis'] = {
+          dotnet_analyzer_diagnostics_scope = 'openFiles',
+          dotnet_compiler_diagnostics_scope = 'openFiles',
+
+          -- To restore Roslyn's full-solution background analysis, change both
+          -- values above from `openFiles` to `fullSolution`, then restart Roslyn
+          -- with `:lsp restart roslyn_ls` (or restart Neovim). Full analysis is
+          -- thorough but can be expensive in repositories with many projects.
+        },
+        ['csharp|code_lens'] = {
+          dotnet_enable_references_code_lens = false,
+        },
+        ['csharp|symbol_search'] = {
+          dotnet_search_reference_assemblies = false,
+        },
+        ['csharp|completion'] = {
+          dotnet_show_completion_items_from_unimported_namespaces = false,
+        },
+      },
+    },
 
     clangd = {},
 
@@ -902,11 +1010,15 @@ do
   --    :Mason
   --
   -- You can press `g?` for help in this menu.
-  local ensure_installed = vim.tbl_keys(servers or {})
+  -- BasedPyright is installed with npm because Mason's current macOS x86_64
+  -- package falls back to building Node from source and fails to link. It is
+  -- still configured and enabled above; only its installation is external.
+  local ensure_installed = vim.tbl_filter(function(name) return name ~= 'basedpyright' end, vim.tbl_keys(servers or {}))
   vim.list_extend(ensure_installed, {
     'clang-format',
     'csharpier',
     'markdownlint',
+    'netcoredbg',
     'stylua',
   })
 
@@ -933,16 +1045,21 @@ do
   require('conform').setup {
     notify_on_error = false,
     format_on_save = function(bufnr)
-      -- You can specify filetypes to autoformat on save here:
+      -- Keep save-time formatting to deterministic formatters for the active
+      -- development stack. Very large/generated files are left untouched.
       local enabled_filetypes = {
-        -- lua = true,
-        -- python = true,
+        c = true,
+        cpp = true,
+        cs = true,
+        dart = true,
+        lua = true,
+        python = true,
+        rust = true,
+        zig = true,
       }
-      if enabled_filetypes[vim.bo[bufnr].filetype] then
-        return { timeout_ms = 500 }
-      else
-        return nil
-      end
+      local path = vim.api.nvim_buf_get_name(bufnr)
+      if path:match '/bin/' or path:match '/obj/' or vim.api.nvim_buf_line_count(bufnr) > 10000 then return nil end
+      if enabled_filetypes[vim.bo[bufnr].filetype] then return { timeout_ms = 2000 } end
     end,
     default_format_opts = {
       lsp_format = 'fallback', -- Use external formatters if configured below, otherwise use LSP formatting. Set to `false` to disable LSP formatting entirely.
@@ -955,6 +1072,7 @@ do
       rust = { 'rustfmt' },
       python = { 'ruff_format' },
       dart = { 'dart_format' },
+      lua = { 'stylua' },
       zig = { 'zigfmt' },
       -- Conform can also run multiple formatters sequentially
       -- python = { "isort", "black" },
@@ -981,9 +1099,61 @@ do
   vim.keymap.set('n', '<leader>xq', '<cmd>Trouble qflist toggle<CR>', { desc = 'Quickfix list' })
   vim.keymap.set('n', '<leader>xr', '<cmd>Trouble lsp_references toggle<CR>', { desc = 'LSP references' })
 
-  -- [[ Toggleable terminal ]]
+  -- [[ Start dashboard and toggleable terminal ]]
   vim.pack.add { gh 'folke/snacks.nvim' }
-  require('snacks').setup { terminal = { enabled = true } }
+  require('snacks').setup {
+    dashboard = {
+      enabled = true,
+      formats = {
+        -- Keep the dashboard readable even when the terminal font does not
+        -- include Nerd Font glyphs. Snacks formatters must return a dashboard
+        -- text object, even when its displayed text is intentionally empty.
+        icon = function() return { '', width = 0 } end,
+      },
+      preset = {
+        header = [[
+ _   _                 _
+| \ | | ___  _____   _(_)_ __ ___
+|  \| |/ _ \/ _ \ \ / / | '_ ` _ \
+| |\  |  __/ (_) \ V /| | | | | | |
+|_| \_|\___|\___/ \_/ |_|_| |_| |_|]],
+        keys = {
+          { key = 'f', desc = 'Find file in project', action = ":lua Snacks.dashboard.pick('files', { cwd = vim.fn.getcwd() })" },
+          { key = 'g', desc = 'Search text in project', action = ":lua Snacks.dashboard.pick('live_grep', { cwd = vim.fn.getcwd() })" },
+          { key = 'e', desc = 'Open file tree', action = ':Neotree filesystem show left' },
+          { key = 'c', desc = 'Open Neovim config', action = ":lua Snacks.dashboard.pick('files', { cwd = vim.fn.stdpath('config') })" },
+          { key = 'n', desc = 'New file', action = ':ene | startinsert' },
+          { key = 'q', desc = 'Quit', action = ':qa' },
+        },
+      },
+      sections = {
+        { section = 'header' },
+        { section = 'keys', gap = 1, padding = 1 },
+        { title = 'Recent files in this project', section = 'recent_files', cwd = true, limit = 5, indent = 2, padding = 1 },
+        -- Selecting a recent project is an intentional cwd change. Snacks then
+        -- opens Telescope in that project; ordinary buffer changes never cd.
+        { title = 'Recent projects', section = 'projects', limit = 5, indent = 2, padding = 1 },
+      },
+    },
+    lazygit = {
+      configure = true,
+      config = {
+        gui = {
+          -- The rest of this config does not assume a Nerd Font either.
+          nerdFontsVersion = '',
+        },
+      },
+    },
+    terminal = { enabled = true },
+  }
+
+  -- The lowercase mapping follows the session's one-shot cwd. The uppercase
+  -- mapping deliberately follows the repository containing the current file,
+  -- which is useful in workspaces with nested repositories or submodules.
+  vim.keymap.set('n', '<leader>gg', function() Snacks.lazygit { cwd = vim.fn.getcwd() } end, { desc = 'Lazygit (session project)' })
+  vim.keymap.set('n', '<leader>gG', function() Snacks.lazygit { cwd = git_root() } end, { desc = 'Lazygit (current file repository)' })
+  vim.keymap.set('n', '<leader>gl', function() Snacks.lazygit.log { cwd = vim.fn.getcwd() } end, { desc = 'Lazygit project [L]og' })
+  vim.keymap.set('n', '<leader>gf', function() Snacks.lazygit.log_file() end, { desc = 'Lazygit current [F]ile history' })
 
   local function toggle_terminal()
     if vim.bo.buftype ~= 'terminal' or not vim.t.project_terminal_root then vim.t.project_terminal_root = project_root() end
@@ -994,7 +1164,92 @@ do
 end
 
 -- ============================================================
--- SECTION 9: AGENT
+-- SECTION 9: PROJECT TASKS
+-- Async build, test, lint, and run commands through Overseer
+-- ============================================================
+do
+  vim.pack.add { gh 'stevearc/overseer.nvim' }
+
+  local overseer = require 'overseer'
+  overseer.setup {
+    task_list = {
+      direction = 'bottom',
+      min_height = 12,
+      max_height = 25,
+    },
+  }
+
+  local function run_project_task()
+    local root = project_root()
+    local filetype = vim.bo.filetype
+    local exists = function(name) return vim.uv.fs_stat(vim.fs.joinpath(root, name)) ~= nil end
+    local tasks = {}
+    local add = function(name, cmd) tasks[#tasks + 1] = { name = name, cmd = cmd } end
+
+    if exists 'Cargo.toml' then
+      add('Rust: check', { 'cargo', 'check', '--all-features' })
+      add('Rust: clippy', { 'cargo', 'clippy', '--all-features', '--all-targets' })
+      add('Rust: test', { 'cargo', 'test', '--all-features' })
+      add('Rust: run', { 'cargo', 'run' })
+    end
+
+    if filetype == 'cs' or exists 'global.json' or exists 'Directory.Build.props' then
+      add('C#: build', { 'dotnet', 'build' })
+      add('C#: test', { 'dotnet', 'test' })
+      add('C#: run', { 'dotnet', 'run' })
+    end
+
+    if exists 'pubspec.yaml' then
+      local flutter = vim.fn.executable 'fvm' == 1 and { 'fvm', 'flutter' } or { 'flutter' }
+      add('Flutter: analyze', vim.list_extend(vim.deepcopy(flutter), { 'analyze' }))
+      add('Flutter: test', vim.list_extend(vim.deepcopy(flutter), { 'test' }))
+      add('Flutter: run', vim.list_extend(vim.deepcopy(flutter), { 'run' }))
+    end
+
+    if exists 'pyproject.toml' then
+      local python_runner = vim.fn.executable 'uv' == 1 and { 'uv', 'run' } or {}
+      add('Python: test', vim.list_extend(vim.deepcopy(python_runner), { 'pytest' }))
+      add('Python: Ruff check', vim.list_extend(vim.deepcopy(python_runner), { 'ruff', 'check', '.' }))
+    end
+
+    if exists 'Project.toml' or exists 'JuliaProject.toml' then add('Julia: test project', { 'julia', '--project=.', '-e', 'using Pkg; Pkg.test()' }) end
+
+    if exists 'build.zig' then
+      add('Zig: build', { 'zig', 'build' })
+      add('Zig: test', { 'zig', 'build', 'test' })
+      add('Zig: run', { 'zig', 'build', 'run' })
+    end
+
+    if exists 'CMakeLists.txt' then
+      add('CMake: build', { 'cmake', '--build', 'build' })
+      add('CMake: test', { 'ctest', '--test-dir', 'build', '--output-on-failure' })
+    elseif exists 'Makefile' then
+      add('Make: build', { 'make' })
+      add('Make: test', { 'make', 'test' })
+    end
+
+    if #tasks == 0 then
+      vim.notify('No project tasks detected at ' .. root, vim.log.levels.WARN)
+      return
+    end
+
+    vim.ui.select(tasks, {
+      prompt = 'Project task (' .. root .. ')',
+      format_item = function(task) return task.name end,
+    }, function(task)
+      if not task then return end
+      overseer.new_task({ name = task.name, cmd = task.cmd, cwd = root, components = { 'default' } }):start()
+    end)
+  end
+
+  vim.keymap.set('n', '<leader>rr', run_project_task, { desc = '[R]un project task' })
+  vim.keymap.set('n', '<leader>rR', '<cmd>OverseerRun<CR>', { desc = '[R]un any Overseer task' })
+  vim.keymap.set('n', '<leader>rl', function() overseer.toggle() end, { desc = 'Task [L]ist' })
+  vim.keymap.set('n', '<leader>ra', function() overseer.run_action() end, { desc = 'Task [A]ction' })
+end
+
+-- ============================================================
+-- SECTION 10: AGENT
 -- ACP client for Claude Code, Codex, and OpenCode
 -- ============================================================
 do
@@ -1018,25 +1273,16 @@ do
     },
   }
 
-  local function at_project_root(callback)
-    vim.cmd.cd(vim.fn.fnameescape(project_root()))
-    callback()
-  end
-
-  vim.keymap.set('n', '<leader>aa', function()
-    at_project_root(function() require('agentic').toggle() end)
-  end, { desc = 'Toggle agent panel' })
+  vim.keymap.set('n', '<leader>aa', function() require('agentic').toggle() end, { desc = 'Toggle agent panel' })
   vim.keymap.set('n', '<leader>af', function() require('agentic').add_file() end, { desc = 'Add current file to agent' })
   vim.keymap.set('v', '<leader>as', function() require('agentic').add_selection() end, { desc = 'Add selection to agent' })
-  vim.keymap.set('n', '<leader>an', function()
-    at_project_root(function() require('agentic').new_session() end)
-  end, { desc = 'New agent session' })
+  vim.keymap.set('n', '<leader>an', function() require('agentic').new_session() end, { desc = 'New agent session' })
   vim.keymap.set('n', '<leader>ap', function() require('agentic').switch_provider() end, { desc = 'Switch agent provider' })
   vim.keymap.set('n', '<leader>ar', function() require('agentic').restore_session() end, { desc = 'Restore agent session' })
 end
 
 -- ============================================================
--- SECTION 10: AUTOCOMPLETE & SNIPPETS
+-- SECTION 11: AUTOCOMPLETE & SNIPPETS
 -- blink.cmp and luasnip setup
 -- ============================================================
 do
@@ -1118,7 +1364,7 @@ do
 end
 
 -- ============================================================
--- SECTION 11: TREESITTER
+-- SECTION 12: TREESITTER
 -- Parser installation, syntax highlighting, folds, indentation
 -- ============================================================
 do
@@ -1200,7 +1446,7 @@ do
 end
 
 -- ============================================================
--- SECTION 12: OPTIONAL EXAMPLES / NEXT STEPS
+-- SECTION 13: OPTIONAL EXAMPLES / NEXT STEPS
 -- kickstart.plugins.* examples
 -- ============================================================
 do
@@ -1213,8 +1459,8 @@ do
   --  Here are some example plugins that I've included in the Kickstart repository.
   --  Uncomment any of the lines below to enable them (you will need to restart nvim).
   --
-  -- require 'kickstart.plugins.debug'
-  -- require 'kickstart.plugins.indent_line'
+  require 'kickstart.plugins.debug'
+  require 'kickstart.plugins.indent_line'
   require 'kickstart.plugins.lint'
   require 'kickstart.plugins.autopairs'
   require 'kickstart.plugins.neo-tree'
